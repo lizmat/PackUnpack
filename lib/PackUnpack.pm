@@ -60,7 +60,7 @@ dd pack("a*aa2",<a bb ccc>);
 dd pack("A*A*A*",<a bb ccc>);
 dd pack("Z*Z5Z2",<a bb ccc>);
 dd pack("h*","2143");
-dd pack("H*","1234");
+dd pack("CH*",42,"1234");
 dd pack("N*",1,2,3);
 dd pack("N*",4,5,6);
 dd pack("x5");
@@ -119,6 +119,13 @@ multi sub pack(@template, *@items) {
               while ($i = $i + 2) < $chars;
         }
     }
+    sub ascii() {
+        my $data = @items.AT-POS($pos++).ords.cache;
+        if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
+            X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
+        }
+        $data
+    }
 
     # make sure this has the same order as the %dispatch initialization
     my @dispatch =
@@ -131,27 +138,16 @@ multi sub pack(@template, *@items) {
             fill((),0,0);
         }
       },
-      -> --> Nil {  # A
-        if $pos < $elems {
-            my $data = @items.AT-POS($pos++).ords.cache;
-            if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
-                X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
-            }
-            fill($data,0x20,0);
-        }
-        else {
-            fill((),0x20,0);
-        }
-      },
+      -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,0) },  # A
       -> --> Nil {  # C
         $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
       },
       -> --> Nil {  # h
-        $repeat = @items if $repeat eq '*' || $repeat > @items;
+        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
         from-hex(@items.AT-POS($pos++),1) for ^$repeat;
       },
       -> --> Nil {  # H
-        $repeat = @items if $repeat eq '*' || $repeat > @items;
+        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
         from-hex(@items.AT-POS($pos++),0) for ^$repeat;
       },
       -> --> Nil { repeated-shift-per-byte(@NAT)  },     # I
@@ -163,18 +159,7 @@ multi sub pack(@template, *@items) {
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # v
       -> --> Nil { repeated-shift-per-byte(@VAX4) },     # V
       -> --> Nil { fill((),0,0) unless $repeat eq '*' }, # x
-      -> --> Nil {  # Z
-        if $pos < $elems {
-            my $data = @items.AT-POS($pos++).ords.cache;
-            if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
-                X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
-            }
-            fill($data,0,1);
-        }
-        else {
-            fill((),0,1);
-        }
-      },
+      -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,1) },  # Z
     ;
 
     for @template -> $todo {
