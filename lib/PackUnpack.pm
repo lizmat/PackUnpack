@@ -19,6 +19,16 @@ my int @VAX4 = 0x00,0x08,0x10,0x18;                     # long
 my int @VAX8 = 0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x38; # quad
 my int @NAT  = $bits == 32 ?? @VAX4 !! @VAX8;           # native
 
+dd parse-template("a*x234N");
+dd pack("a*aa2",<a bb ccc>);
+dd pack("A*A*A*",<a bb ccc>);
+dd pack("Z*Z5Z2",<a bb ccc>);
+dd pack("h*","2143");
+dd pack("CH*",42,"1234");
+dd pack("N*",1,2,3);
+dd pack("N*",4,5,6);
+dd pack("x5");
+
 sub parse-template($template) is export {
     my int $i     = -1;
     my int $chars = $template.chars;
@@ -32,7 +42,7 @@ sub parse-template($template) is export {
           ?? substr($template,$i,1)
           !! "1";
 
-        if %dispatch.EXISTS-KEY($repeat) {
+        if %dispatch.EXISTS-KEY($repeat) {  # repeat factor is next directive
             @template.push( (%dispatch.AT-KEY($directive),1) );
             $i = $i - 1;  # went one too far
         }
@@ -54,16 +64,6 @@ sub parse-template($template) is export {
 
     @template;
 }
-
-dd parse-template("a*x234N");
-dd pack("a*aa2",<a bb ccc>);
-dd pack("A*A*A*",<a bb ccc>);
-dd pack("Z*Z5Z2",<a bb ccc>);
-dd pack("h*","2143");
-dd pack("CH*",42,"1234");
-dd pack("N*",1,2,3);
-dd pack("N*",4,5,6);
-dd pack("x5");
 
 proto sub pack(|) is export { * }
 multi sub pack(Str $template, |c) { pack(parse-template($template),|c) }
@@ -168,6 +168,70 @@ multi sub pack(@template, *@items) {
     }
 
     $buf
+}
+
+proto sub unpack(|) is export { * }
+multi sub unpack(Str $template, Blob:D \b) {
+    unpack(parse-template($template),b)
+}
+multi sub unpack(@template, Blob:D \b) {
+    my @result;
+    my $repeat;
+    my int $pos   = 0;
+    my int $elems = b.elems; 
+
+    sub reassemble-string($filler?) {
+        my @string;
+        if $repeat eq "*" || $pos + $repeat > $elems {
+            $pos = $pos - 1;
+            @string.push(b.ATPOS($pos)) while ($pos = $pos + 1) < $elems;
+        }
+        else {
+            @string.push(b.ATPOS($pos++)) for ^$repeat;
+        }
+        if defined($filler) {
+            my int $i = @string.elems;
+            @string.pop
+              while ($i = $i - 1) >= 0 && @string.AT-POS($i) == $filler;
+        }
+        @result.push(chrs(@string));
+    }
+    sub reassemble-int(int @shifts) {
+    }
+
+    # make sure this has the same order as the %dispatch initialization
+    my @dispatch =
+      -> --> Nil { reassemble-string() },      # a
+      -> --> Nil { reassemble-string(0x20) },  # A
+      -> --> Nil {  # C
+#        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+      },
+      -> --> Nil {  # h
+#        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
+#        from-hex(@items.AT-POS($pos++),1) for ^$repeat;
+      },
+      -> --> Nil {  # H
+#        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
+#        from-hex(@items.AT-POS($pos++),0) for ^$repeat;
+      },
+      -> --> Nil { reassemble-int(@NAT)  },     # I
+      -> --> Nil { reassemble-int(@VAX4) },     # L
+      -> --> Nil { reassemble-int(@NET2) },     # n
+      -> --> Nil { reassemble-int(@NET4) },     # N
+      -> --> Nil { reassemble-int(@VAX8) },     # Q
+      -> --> Nil { reassemble-int(@VAX2) },     # S
+      -> --> Nil { reassemble-int(@VAX2) },     # v
+      -> --> Nil { reassemble-int(@VAX4) },     # V
+      -> --> Nil { }, # x
+      -> --> Nil { reassemble-string(0) },  # Z
+    ;
+
+    for @template -> $todo {
+        $repeat = $todo.AT-POS(1);
+        @dispatch.AT-POS($todo.AT-POS(0))();
+    }
+
+    @result
 }
 
 =finish
