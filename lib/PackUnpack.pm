@@ -6,7 +6,7 @@ my %dispatch;
 {
     my int $i = -1;
     %dispatch.ASSIGN-KEY($_,$i = $i + 1)
-      for <a A C H I L n N Q S v V x Z>;
+      for <a A C h H I L n N Q S v V x Z>;
 }
 my int $bits = $*KERNEL.bits;
 
@@ -59,7 +59,8 @@ dd parse-template("a*x234N");
 dd pack("a*aa2",<a bb ccc>);
 dd pack("A*A*A*",<a bb ccc>);
 dd pack("Z*Z5Z2",<a bb ccc>);
-dd pack("H*","123456789abcdef");
+dd pack("h*","2143");
+dd pack("H*","1234");
 dd pack("N*",1,2,3);
 dd pack("N*",4,5,6);
 
@@ -71,7 +72,7 @@ multi sub pack(@template, *@items) {
     my int $pos   = 0;
     my int $elems = @items.elems; 
 
-    sub repeated-shift-per-byte(int @shifts) {
+    sub repeated-shift-per-byte(int @shifts --> Nil) {
         if $repeat eq '*' {
             for ^$elems {
                 my int $number = @items.AT-POS($pos++);
@@ -85,7 +86,7 @@ multi sub pack(@template, *@items) {
             }
         }
     }
-    sub fill($data,\filler,\last-must-be-null) {
+    sub fill($data,\filler,\last-must-be-null --> Nil) {
         my int $i     = -1;
         my int $elems = +$data;
         if $repeat eq "*" {
@@ -99,6 +100,22 @@ multi sub pack(@template, *@items) {
         else {
             $buf.push($data.AT-POS($i)) while ($i = $i + 1) <  $elems;
             $buf.push(filler)           while ($i = $i + 1) <= $repeat;
+        }
+    }
+    sub from-hex(\hex,\flip --> Nil) {
+        my int $chars = hex.chars;
+        if $chars % 2 {
+            hex    = hex ~ '0';
+            $chars = $chars + 1;
+        }
+        my int $i = -2;
+        if flip {
+            $buf.append( :16(substr(hex,$i,2).flip) )
+              while ($i = $i + 2) < $chars;
+        }
+        else {
+            $buf.append( :16(substr(hex,$i,2)) )
+              while ($i = $i + 2) < $chars;
         }
     }
 
@@ -116,13 +133,13 @@ multi sub pack(@template, *@items) {
         fill($data,0x20,0);
       },
       -> { $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 ) }, # C
+      -> {  # h
+        $repeat = @items if $repeat eq '*' || $repeat > @items;
+        from-hex(@items.AT-POS($pos++),1) for ^$repeat;
+      },
       -> {  # H
-        $repeat = @items if $repeat eq '*';
-        for ^$repeat {
-            my $hex = $pos < $elems ?? @items.AT-POS($pos++) !! '';
-            $hex = $hex ~ '0' if $hex.chars % 2;
-            $buf.append( $hex.comb(2).map( { :16($_) } ) );
-        }
+        $repeat = @items if $repeat eq '*' || $repeat > @items;
+        from-hex(@items.AT-POS($pos++),0) for ^$repeat;
       },
       -> { repeated-shift-per-byte(@NAT)  }, # I
       -> { repeated-shift-per-byte(@VAX4) }, # L
