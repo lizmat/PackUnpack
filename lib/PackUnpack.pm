@@ -1,8 +1,23 @@
+use v6.c;
+
 use MONKEY-TYPING;
 
 my %dispatch;
-my int $i = -1;
-%dispatch.ASSIGN-KEY($_,$i = $i + 1) for <a A C H L n N S v V x Z>;
+{
+    my int $i = -1;
+    %dispatch.ASSIGN-KEY($_,$i = $i + 1)
+      for <a A C H I L n N Q S v V x Z>;
+}
+my int $bits = $*KERNEL.bits;
+
+# this need to be conditional on the endianness of the system
+my int @NET2 = 0x08,0x00;              # short, network (big-endian) order
+my int @NET4 = 0x18,0x10,0x08,0x00;                     # long
+my int @NET8 = 0x38,0x30,0x28,0x20,0x18,0x10,0x08,0x00; # quad
+my int @VAX2 = 0x00,0x08;              # short, VAX (little-endian) order
+my int @VAX4 = 0x00,0x08,0x10,0x18;                     # long
+my int @VAX8 = 0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x38; # quad
+my int @NAT  = $bits == 32 ?? @VAX4 !! @VAX8;           # native
 
 sub parse-template($template) is export {
     my int $i     = -1;
@@ -13,26 +28,26 @@ sub parse-template($template) is export {
         X::Buf::Pack.new(:$directive).throw
           unless %dispatch.EXISTS-KEY($directive);
 
-        my str $amount = ($i = $i + 1) < $chars
+        my str $repeat = ($i = $i + 1) < $chars
           ?? substr($template,$i,1)
           !! "1";
 
-        if %dispatch.EXISTS-KEY($amount) {
+        if %dispatch.EXISTS-KEY($repeat) {
             @template.push( (%dispatch.AT-KEY($directive),1) );
             $i = $i - 1;  # went one too far
         }
-        elsif $amount eq '*' {
-            @template.push( (%dispatch.AT-KEY($directive),$amount) );
+        elsif $repeat eq '*' {
+            @template.push( (%dispatch.AT-KEY($directive),$repeat) );
         }
-        elsif $amount.unival === NaN {
-            X::Buf::Pack.new(:directive($directive ~ $amount)).throw;
+        elsif $repeat.unival === NaN {
+            X::Buf::Pack.new(:directive($directive ~ $repeat)).throw;
         }
         else {  # a number
             my $next;
-            $amount = $amount ~ $next
+            $repeat = $repeat ~ $next
               while ($i = $i + 1) < $chars
                 && !(($next = substr($template,$i,1)).unival === NaN);
-            @template.push( (%dispatch.AT-KEY($directive),+$amount) );
+            @template.push( (%dispatch.AT-KEY($directive),+$repeat) );
             $i = $i - 1; # went one too far
         }
     }
@@ -41,81 +56,74 @@ sub parse-template($template) is export {
 }
 
 dd parse-template("a*x234N");
+dd pack("a*aa2",<a bb ccc>);
+dd pack("A*A*A*",<a bb ccc>);
+dd pack("H*","123456789abcdef");
+dd pack("N*",1,2,3);
+dd pack("N*",4,5,6);
 
 proto sub pack(|) is export { * }
 multi sub pack(Str $template, |c) { pack(parse-template($template),|c) }
-
 multi sub pack(@template, *@items) {
-
     my $buf = Buf.new;
-    my $amount;
+    my $repeat;
+    my int $pos   = 0;
+    my int $elems = @items.elems; 
 
-    sub shift-per-byte(int \number, int @shifts --> Nil) {
-        $buf.push(number +> $_) for @shifts;
+    sub repeated-shift-per-byte(int @shifts) {
+        if $repeat eq '*' {
+            for ^$elems {
+                my int $number = @items.AT-POS($pos++);
+                $buf.push($number +> $_) for @shifts;
+            }
+        }
+        else {
+            for ^$repeat {
+                my int $number = $pos < $elems ?? @items.AT-POS($pos++) !! 0;
+                $buf.push($number +> $_) for @shifts;
+            }
+        }
     }
 
-    my int @NET2 = 0x08, 0x00;             # short, network (big-endian) order
-    my int @NET4 = 0x18, 0x10, 0x08, 0x00; # long, network (big-endian) order
-    my int @VAX2 = 0x00, 0x08;             # short, VAX (little-endian) order
-    my int @VAX4 = 0x00, 0x08, 0x10, 0x18; # long, VAX (little-endian) order
-
-    state @dispatch =
+    # make sure this has the same order as the %dispatch initialization
+    my @dispatch =
       -> {  # a
-        my $data = (@items ?? @items.shift !! Buf.new);
+        my $data = $pos < $elems ?? @items.AT-POS($pos++) !! Buf.new;
         $data .= encode if $data ~~ Str;
-        $amount = $data.cache.elems if $amount eq '*';
-        $buf.append( (@$data, 0 xx *).flat[^$amount] );
+        $repeat = $data.cache.elems if $repeat eq '*';
+        $buf.append( (@$data, 0 xx *).flat[^$repeat] );
       },
       -> {  # A
-        my $data = (@items ?? @items.shift !! '').ords.cache;
-        $amount = $data.elems if $amount eq '*';
+        my $data = $pos < $elems ?? @items.AT-POS($pos++).ords.cache !! ();
+        $repeat = $data.elems if $repeat eq '*';
         if @$data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
             X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
         }
-        $buf.append( (@$data, 0x20 xx *).flat[^$amount] );
+        $buf.append( (@$data, 0x20 xx *).flat[^$repeat] );
       },
-      -> {  # C
-        $buf.append( @items.shift );
-      },
+      -> { $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 ) }, # C
       -> {  # H
-        my $hex = @items ?? @items.shift !! '';
-        $hex = $hex ~ '0' if $hex.chars % 2;
-        $buf.append( $hex.comb(2).map( { :16($_) } ) );
+        $repeat = @items if $repeat eq '*';
+        for ^$repeat {
+            my $hex = $pos < $elems ?? @items.AT-POS($pos++) !! '';
+            $hex = $hex ~ '0' if $hex.chars % 2;
+            $buf.append( $hex.comb(2).map( { :16($_) } ) );
+        }
       },
-      -> {  # L
-        my int $number = @items ?? @items.shift !! 0;
-        shift-per-byte($number, @VAX4);
-      },
-      -> {  # n
-        my int $number = @items ?? @items.shift !! 0;
-        shift-per-byte($number, @NET2);
-      },
-      -> {  # N
-        my int $number = @items ?? @items.shift !! 0;
-        shift-per-byte($number, @NET4);
-      },
-      -> {  # S
-        my int $number = @items ?? @items.shift !! 0;
-        shift-per-byte($number, @VAX2);
-      },
-      -> {  # v
-        my int $number = @items ?? @items.shift !! 0;
-        shift-per-byte($number, @VAX2);
-      },
-      -> {  # V
-        my int $number = @items ?? @items.shift !! 0;
-        shift-per-byte($number, @VAX4);
-      },
-      -> {  # x
-        $buf.append( 0x00 xx $amount ) unless $amount eq '*';
-      },
-      -> {  # Z
-        X::NYI.new(feature => 'pack Z').throw;
-      },
+      -> { repeated-shift-per-byte(@NAT)  }, # I
+      -> { repeated-shift-per-byte(@VAX4) }, # L
+      -> { repeated-shift-per-byte(@NET2) }, # n
+      -> { repeated-shift-per-byte(@NET4) }, # N
+      -> { repeated-shift-per-byte(@VAX8) }, # Q
+      -> { repeated-shift-per-byte(@VAX2) }, # S
+      -> { repeated-shift-per-byte(@VAX2) }, # v
+      -> { repeated-shift-per-byte(@VAX4) }, # V
+      -> { $buf.append( 0x00 xx $repeat ) unless $repeat eq '*' }, # x
+      -> { X::NYI.new(feature => 'pack Z').throw }, # Z
     ;
 
     for @template -> $todo {
-        $amount = $todo.AT-POS(1);
+        $repeat = $todo.AT-POS(1);
         @dispatch.AT-POS($todo.AT-POS(0))();
     }
 
@@ -139,9 +147,9 @@ augment class Buf {
         my @fields;
         for @template -> $unit {
             my $directive = substr($unit,0,1);
-            my $amount    = substr($unit,1);
-            my $pa = $amount eq ''  ?? 1            !!
-                     $amount eq '*' ?? @bytes.elems !! +$amount;
+            my $repeat    = substr($unit,1);
+            my $pa = $repeat eq ''  ?? 1            !!
+                     $repeat eq '*' ?? @bytes.elems !! +$repeat;
 
             given $directive {
                 when 'a' | 'A' | 'Z' {
