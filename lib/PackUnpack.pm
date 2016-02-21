@@ -63,6 +63,7 @@ dd pack("h*","2143");
 dd pack("H*","1234");
 dd pack("N*",1,2,3);
 dd pack("N*",4,5,6);
+dd pack("x5");
 
 proto sub pack(|) is export { * }
 multi sub pack(Str $template, |c) { pack(parse-template($template),|c) }
@@ -121,41 +122,58 @@ multi sub pack(@template, *@items) {
 
     # make sure this has the same order as the %dispatch initialization
     my @dispatch =
-      -> {  # a
-        my $data = $pos < $elems ?? @items.AT-POS($pos++) !! Buf.new;
-        fill($data ~~ Str ?? $data.encode !! $data,0,0);
-      },
-      -> {  # A
-        my $data = $pos < $elems ?? @items.AT-POS($pos++).ords.cache !! ();
-        if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
-            X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
+      -> --> Nil {  # a
+        if $pos < $elems {
+            my $data = @items.AT-POS($pos++);
+            fill($data ~~ Str ?? $data.encode !! $data,0,0);
         }
-        fill($data,0x20,0);
+        else {
+            fill((),0,0);
+        }
       },
-      -> { $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 ) }, # C
-      -> {  # h
+      -> --> Nil {  # A
+        if $pos < $elems {
+            my $data = @items.AT-POS($pos++).ords.cache;
+            if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
+                X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
+            }
+            fill($data,0x20,0);
+        }
+        else {
+            fill((),0x20,0);
+        }
+      },
+      -> --> Nil {  # C
+        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+      },
+      -> --> Nil {  # h
         $repeat = @items if $repeat eq '*' || $repeat > @items;
         from-hex(@items.AT-POS($pos++),1) for ^$repeat;
       },
-      -> {  # H
+      -> --> Nil {  # H
         $repeat = @items if $repeat eq '*' || $repeat > @items;
         from-hex(@items.AT-POS($pos++),0) for ^$repeat;
       },
-      -> { repeated-shift-per-byte(@NAT)  }, # I
-      -> { repeated-shift-per-byte(@VAX4) }, # L
-      -> { repeated-shift-per-byte(@NET2) }, # n
-      -> { repeated-shift-per-byte(@NET4) }, # N
-      -> { repeated-shift-per-byte(@VAX8) }, # Q
-      -> { repeated-shift-per-byte(@VAX2) }, # S
-      -> { repeated-shift-per-byte(@VAX2) }, # v
-      -> { repeated-shift-per-byte(@VAX4) }, # V
-      -> { $buf.append( 0x00 xx $repeat ) unless $repeat eq '*' }, # x
-      -> {  # Z
-        my $data = $pos < $elems ?? @items.AT-POS($pos++).ords.cache !! ();
-        if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
-            X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
+      -> --> Nil { repeated-shift-per-byte(@NAT)  },     # I
+      -> --> Nil { repeated-shift-per-byte(@VAX4) },     # L
+      -> --> Nil { repeated-shift-per-byte(@NET2) },     # n
+      -> --> Nil { repeated-shift-per-byte(@NET4) },     # N
+      -> --> Nil { repeated-shift-per-byte(@VAX8) },     # Q
+      -> --> Nil { repeated-shift-per-byte(@VAX2) },     # S
+      -> --> Nil { repeated-shift-per-byte(@VAX2) },     # v
+      -> --> Nil { repeated-shift-per-byte(@VAX4) },     # V
+      -> --> Nil { fill((),0,0) unless $repeat eq '*' }, # x
+      -> --> Nil {  # Z
+        if $pos < $elems {
+            my $data = @items.AT-POS($pos++).ords.cache;
+            if $data.first( -> $byte { $byte > 0x7f } ) -> $too-large {
+                X::Buf::Pack::NonASCII.new(:char($too-large.chr)).throw;
+            }
+            fill($data,0,1);
         }
-        fill($data,0,1);
+        else {
+            fill((),0,1);
+        }
       },
     ;
 
