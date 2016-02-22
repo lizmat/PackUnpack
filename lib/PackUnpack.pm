@@ -1,6 +1,6 @@
 use v6.c;
 
-unit module PackUnpack:ver<0.04>;
+unit module PackUnpack:ver<0.05>;
 
 my %dispatch;
 {
