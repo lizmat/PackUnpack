@@ -6,7 +6,7 @@ my %dispatch;
 {
     my int $i = -1;
     %dispatch.ASSIGN-KEY($_,$i = $i + 1)
-      for <a A c C h H i I l L n N q Q s S U v V x Z>;   # Q fix highlighting
+      for <a A c C h H i I l L n N q Q s S U v V x X Z>;  # Q fix hl
 }
 my int $bits = $*KERNEL.bits;
 
@@ -169,6 +169,13 @@ multi sub pack(@template, *@items) {
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # v
       -> --> Nil { repeated-shift-per-byte(@VAX4) },     # V
       -> --> Nil { fill((),0,0) unless $repeat eq '*' }, # x
+      -> --> Nil {
+        unless $repeat eq '*' {
+            $repeat <= $buf.elems
+              ?? ($buf.pop for ^$repeat)
+              !! die "'X' outside of " ~ $buf.^name;
+        }
+      },
       -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,1) },  # Z
     ;
 
@@ -256,8 +263,15 @@ multi sub unpack(@template, Blob:D \b) {
             ?? $elems
             !! $pos + $repeat < $elems
               ?? $pos + $repeat
-              !! die "'x' outside of Blob:D";
+              !! die "'x' outside of " ~ b.^name;
       },
+      -> --> Nil {
+          unless $repeat eq "*" {
+              $repeat <= $pos
+                ?? $pos = $pos - $repeat
+                !! die "'X' outside of " ~ b.^name;
+          }
+      },  # X
       -> --> Nil { reassemble-string(0) },  # Z
     ;
 
