@@ -240,7 +240,13 @@ multi sub unpack(@template, Blob:D \b) {
       },        
       -> --> Nil { reassemble-int(@VAX2) },     # v
       -> --> Nil { reassemble-int(@VAX4) },     # V
-      -> --> Nil { }, # x
+      -> --> Nil { # x
+          $pos = $repeat eq "*"
+            ?? $elems
+            !! $pos + $repeat < $elems
+              ?? $pos + $repeat
+              !! die "'x' outside of Blob:D";
+      },
       -> --> Nil { reassemble-string(0) },  # Z
     ;
 
