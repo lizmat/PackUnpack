@@ -6,7 +6,7 @@ my %dispatch;
 {
     my int $i = -1;
     %dispatch.ASSIGN-KEY($_,$i = $i + 1)
-      for <a A C h H I L n N Q S v V x Z>;
+      for <a A c C h H i I l L n N q Q s S v V x Z>;   # Q fix highlighting
 }
 my int $bits = $*KERNEL.bits;
 
@@ -126,6 +126,13 @@ multi sub pack(@template, *@items) {
         }
         $data
     }
+    sub one(--> Nil) {
+        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+    }
+    sub hex(\flip --> Nil) {
+        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
+        from-hex(@items.AT-POS($pos++),flip) for ^$repeat;
+    }
 
     # make sure this has the same order as the %dispatch initialization
     my @dispatch =
@@ -139,22 +146,19 @@ multi sub pack(@template, *@items) {
         }
       },
       -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,0) },  # A
-      -> --> Nil {  # C
-        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
-      },
-      -> --> Nil {  # h
-        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
-        from-hex(@items.AT-POS($pos++),1) for ^$repeat;
-      },
-      -> --> Nil {  # H
-        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
-        from-hex(@items.AT-POS($pos++),0) for ^$repeat;
-      },
+      -> --> Nil { one() },  # c
+      -> --> Nil { one() },  # C
+      -> --> Nil { hex(0) }, # h
+      -> --> Nil { hex(1) }, # H
+      -> --> Nil { repeated-shift-per-byte(@NAT)  },     # i
       -> --> Nil { repeated-shift-per-byte(@NAT)  },     # I
+      -> --> Nil { repeated-shift-per-byte(@VAX4) },     # l
       -> --> Nil { repeated-shift-per-byte(@VAX4) },     # L
       -> --> Nil { repeated-shift-per-byte(@NET2) },     # n
       -> --> Nil { repeated-shift-per-byte(@NET4) },     # N
+      -> --> Nil { repeated-shift-per-byte(@VAX8) },     # q
       -> --> Nil { repeated-shift-per-byte(@VAX8) },     # Q
+      -> --> Nil { repeated-shift-per-byte(@VAX2) },     # s
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # S
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # v
       -> --> Nil { repeated-shift-per-byte(@VAX4) },     # V
@@ -203,6 +207,9 @@ multi sub unpack(@template, Blob:D \b) {
     my @dispatch =
       -> --> Nil { reassemble-string() },      # a
       -> --> Nil { reassemble-string(0x20) },  # A
+      -> --> Nil {  # c
+#        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+      },
       -> --> Nil {  # C
 #        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
       },
@@ -214,11 +221,15 @@ multi sub unpack(@template, Blob:D \b) {
 #        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
 #        from-hex(@items.AT-POS($pos++),0) for ^$repeat;
       },
+      -> --> Nil { reassemble-int(@NAT)  },     # i
       -> --> Nil { reassemble-int(@NAT)  },     # I
+      -> --> Nil { reassemble-int(@VAX4) },     # l
       -> --> Nil { reassemble-int(@VAX4) },     # L
       -> --> Nil { reassemble-int(@NET2) },     # n
       -> --> Nil { reassemble-int(@NET4) },     # N
+      -> --> Nil { reassemble-int(@VAX8) },     # q
       -> --> Nil { reassemble-int(@VAX8) },     # Q
+      -> --> Nil { reassemble-int(@VAX2) },     # s
       -> --> Nil { reassemble-int(@VAX2) },     # S
       -> --> Nil { reassemble-int(@VAX2) },     # v
       -> --> Nil { reassemble-int(@VAX4) },     # V
