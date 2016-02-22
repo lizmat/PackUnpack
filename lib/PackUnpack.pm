@@ -24,6 +24,9 @@ sub parse-pack-template($template) is export {
     my int $i     = -1;
     my int $chars = $template.chars;
     my @template;
+
+    sub is-whitespace(\s) { s eq " " || uniprop(s,'White_Space') }
+
     while ($i = $i + 1) < $chars {
         my str $directive = substr($template,$i,1);
         if %dispatch.EXISTS-KEY($directive) {
@@ -38,6 +41,9 @@ sub parse-pack-template($template) is export {
             elsif $repeat eq '*' {
                 @template.push( (%dispatch.AT-KEY($directive),$repeat) );
             }
+            elsif is-whitespace($repeat) {
+                # no action needed, whitespace is ignored
+            }
             elsif $repeat.unival === NaN {
                 X::Buf::Pack.new(:directive($directive ~ $repeat)).throw;
             }
@@ -50,7 +56,7 @@ sub parse-pack-template($template) is export {
                 $i = $i - 1; # went one too far
             }
         }
-        elsif $directive eq " " || uniprop($directive,'White_Space') {
+        elsif is-whitespace($directive) {
             # no action needed, whitespace is ignored
         }
         else {
