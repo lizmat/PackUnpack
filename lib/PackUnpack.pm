@@ -1,6 +1,6 @@
 use v6.c;
 
-unit module PackUnpack:ver<0.03>;
+unit module PackUnpack:ver<0.04>;
 
 my %dispatch;
 {
@@ -17,7 +17,19 @@ my int @NET8 = 0x38,0x30,0x28,0x20,0x18,0x10,0x08,0x00; # quad
 my int @VAX2 = 0x00,0x08;              # short, VAX (little-endian) order
 my int @VAX4 = 0x00,0x08,0x10,0x18;                     # long
 my int @VAX8 = 0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x38; # quad
-my int @NAT  = $bits == 32 ?? @VAX4 !! @VAX8;           # native
+my int @NAT;
+my Int $int-bound;
+my Int $int-diff;
+if $bits == 32 {
+    @NAT       = @VAX4;
+    $int-bound = 2147483647;
+    $int-diff  = 4294967296;
+}
+else {   # assume 64
+    @NAT       = @VAX8;
+    $int-bound =  9223372036854775807;
+    $int-diff  = 18446744073709551616;
+}
 
 # parse a pack/unpack template into ops with additional info
 sub parse-pack-template($template) is export {
@@ -75,7 +87,7 @@ multi sub pack(@template, *@items) {
     my int $pos   = 0;
     my int $elems = @items.elems; 
 
-    sub repeated-shift-per-byte(int @shifts --> Nil) {
+    sub repeat-shift-per-byte(int @shifts --> Nil) {
         if $repeat eq '*' {
             for ^$elems {
                 my int $number = @items.AT-POS($pos++);
@@ -138,7 +150,7 @@ multi sub pack(@template, *@items) {
 
     # make sure this has the same order as the %dispatch initialization
     my @dispatch =
-      -> --> Nil {  # a
+      -> --> Nil {                                                  # a
         if $pos < $elems {
             my $data = @items.AT-POS($pos++);
             fill($data ~~ Str ?? $data.encode !! $data,0,0);
@@ -148,28 +160,28 @@ multi sub pack(@template, *@items) {
         }
       },
       -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,0) },  # A
-      -> --> Nil { one() },  # c
-      -> --> Nil { one() },  # C
-      -> --> Nil { hex(0) }, # h
-      -> --> Nil { hex(1) }, # H
-      -> --> Nil { repeated-shift-per-byte(@NAT)  },     # i
-      -> --> Nil { repeated-shift-per-byte(@NAT)  },     # I
-      -> --> Nil { repeated-shift-per-byte(@VAX4) },     # l
-      -> --> Nil { repeated-shift-per-byte(@VAX4) },     # L
-      -> --> Nil { repeated-shift-per-byte(@NET2) },     # n
-      -> --> Nil { repeated-shift-per-byte(@NET4) },     # N
-      -> --> Nil { repeated-shift-per-byte(@VAX8) },     # q
-      -> --> Nil { repeated-shift-per-byte(@VAX8) },     # Q
-      -> --> Nil { repeated-shift-per-byte(@VAX2) },     # s
-      -> --> Nil { repeated-shift-per-byte(@VAX2) },     # S
-      -> --> Nil {  # U
+      -> --> Nil { one() },                                         # c
+      -> --> Nil { one() },                                         # C
+      -> --> Nil { hex(0) },                                        # h
+      -> --> Nil { hex(1) },                                        # H
+      -> --> Nil { repeat-shift-per-byte(@NAT)  },                  # i
+      -> --> Nil { repeat-shift-per-byte(@NAT)  },                  # I
+      -> --> Nil { repeat-shift-per-byte(@VAX4) },                  # l
+      -> --> Nil { repeat-shift-per-byte(@VAX4) },                  # L
+      -> --> Nil { repeat-shift-per-byte(@NET2) },                  # n
+      -> --> Nil { repeat-shift-per-byte(@NET4) },                  # N
+      -> --> Nil { repeat-shift-per-byte(@VAX8) },                  # q
+      -> --> Nil { repeat-shift-per-byte(@VAX8) },                  # Q
+      -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # s
+      -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # S
+      -> --> Nil {                                                  # U
         $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
         $buf.append(@items.AT-POS($pos++).chr.encode.list) for ^$repeat;
       },
-      -> --> Nil { repeated-shift-per-byte(@VAX2) },     # v
-      -> --> Nil { repeated-shift-per-byte(@VAX4) },     # V
-      -> --> Nil { fill((),0,0) unless $repeat eq '*' }, # x
-      -> --> Nil {
+      -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # v
+      -> --> Nil { repeat-shift-per-byte(@VAX4) },                  # V
+      -> --> Nil { fill((),0,0) unless $repeat eq '*' },            # x
+      -> --> Nil {                                                  # X
         unless $repeat eq '*' {
             $repeat <= $buf.elems
               ?? ($buf.pop for ^$repeat)
@@ -208,7 +220,64 @@ multi sub unpack(@template, Blob:D \b) {
         }
         @result.push(chrs(@string));
     }
-    sub reassemble-int(int @shifts --> Nil) {
+    sub repeat-reassemble-hex(\flip --> Nil) {
+        my str $result = '';
+        my int $byte;
+        my int $times = $repeat eq "*"
+          ?? $elems - $pos
+          !! min($repeat, $elems - $pos);
+
+        if flip {
+            for ^$times {
+                $byte = b.AT-POS($pos++);
+                $result = $result
+                  ~ ($byte % 16).fmt("%x")
+                  ~ ($byte +> 4).fmt("%x");
+            }
+        }
+        else {
+            for ^$times {
+                $byte = b.AT-POS($pos++);
+                $result = $result
+                  ~ ($byte +> 4).fmt("%x")
+                  ~ ($byte % 16).fmt("%x");
+            }
+        }
+
+        @result.push($result)
+    }
+    sub reassemble-Int(int @shifts) {
+        my Int $result = 0;
+        $result = $result +| b.AT-POS($pos++) +< $_ for @shifts;
+        $result
+    }
+    sub repeat-reassemble-uint(int @shifts --> Nil) {
+        my int $shifts = @shifts.elems;
+        if $repeat eq "*" {
+            @result.push(reassemble-Int(@shifts))
+              while $pos + $shifts < $elems;
+        }
+        else {
+            my int $times = min $repeat, ($elems - $pos) / $shifts;
+            @result.push(reassemble-Int(@shifts)) for ^$times;
+        }
+    }
+    sub repeat-reassemble-int(int @shifts,\bound,\diff --> Nil) {
+        my int $shifts = @shifts.elems;
+        my Int $result;
+        if $repeat eq "*" {
+            while $pos + $shifts < $elems {
+                $result = reassemble-Int(@shifts);
+                @result.push($result > bound ?? $result - diff !! $result);
+            }
+        }
+        else {
+            my int $times = min $repeat, ($elems - $pos) / $shifts;
+            for ^$times {
+                $result = reassemble-Int(@shifts);
+                @result.push($result > bound ?? $result - diff !! $result);
+            }
+        }
     }
     sub reassemble-utf8(--> Nil) {
         my int $byte = abyte;
@@ -225,54 +294,57 @@ multi sub unpack(@template, Blob:D \b) {
 
     # make sure this has the same order as the %dispatch initialization
     my @dispatch =
-      -> --> Nil { reassemble-string() },      # a
-      -> --> Nil { reassemble-string(0x20) },  # A
-      -> --> Nil {  # c
-#        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+      -> --> Nil { reassemble-string() },               # a
+      -> --> Nil { reassemble-string(0x20) },           # A
+      -> --> Nil {                                      # c
+        my int $byte = $pos < $elems ?? b.AT-POS($pos++) !! 0;
+        @result.push( $byte > 127 ?? $byte - 256 !! $byte );
       },
-      -> --> Nil {  # C
-#        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+      -> --> Nil {                                      # C
+        @result.push( $pos < $elems ?? b.AT-POS($pos++) !! 0 );
       },
-      -> --> Nil {  # h
-#        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
-#        from-hex(@items.AT-POS($pos++),1) for ^$repeat;
+      -> --> Nil { repeat-reassemble-hex(1)  },         # h
+      -> --> Nil { repeat-reassemble-hex(0)  },         # H
+      -> --> Nil {                                      # i
+          repeat-reassemble-int(@NAT,$int-bound,$int-diff)
       },
-      -> --> Nil {  # H
-#        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
-#        from-hex(@items.AT-POS($pos++),0) for ^$repeat;
+      -> --> Nil { repeat-reassemble-uint(@NAT)  },     # I
+      -> --> Nil {                                      # l
+          repeat-reassemble-int(@VAX4,2147483647,4294967296)
       },
-      -> --> Nil { reassemble-int(@NAT)  },     # i
-      -> --> Nil { reassemble-int(@NAT)  },     # I
-      -> --> Nil { reassemble-int(@VAX4) },     # l
-      -> --> Nil { reassemble-int(@VAX4) },     # L
-      -> --> Nil { reassemble-int(@NET2) },     # n
-      -> --> Nil { reassemble-int(@NET4) },     # N
-      -> --> Nil { reassemble-int(@VAX8) },     # q
-      -> --> Nil { reassemble-int(@VAX8) },     # Q
-      -> --> Nil { reassemble-int(@VAX2) },     # s
-      -> --> Nil { reassemble-int(@VAX2) },     # S
-      -> --> Nil {  # U
+      -> --> Nil { repeat-reassemble-uint(@VAX4) },     # L
+      -> --> Nil { repeat-reassemble-uint(@NET2) },     # n
+      -> --> Nil { repeat-reassemble-uint(@NET4) },     # N
+      -> --> Nil {                                      # q
+          repeat-reassemble-int(@VAX8,9223372036854775807,18446744073709551616)
+      },
+      -> --> Nil { repeat-reassemble-uint(@VAX8) },     # Q
+      -> --> Nil {                                      # s
+          repeat-reassemble-int(@VAX2,32767,65536)
+      },
+      -> --> Nil { repeat-reassemble-uint(@VAX2) },     # S
+      -> --> Nil {                                      # U
           $repeat eq "*"
             ?? (reassemble-utf8() while $pos < $elems)
             !! (reassemble-utf8() for ^$repeat);
       },        
-      -> --> Nil { reassemble-int(@VAX2) },     # v
-      -> --> Nil { reassemble-int(@VAX4) },     # V
-      -> --> Nil { # x
+      -> --> Nil { repeat-reassemble-uint(@VAX2) },     # v
+      -> --> Nil { repeat-reassemble-uint(@VAX4) },     # V
+      -> --> Nil {                                      # x
           $pos = $repeat eq "*"
             ?? $elems
             !! $pos + $repeat < $elems
               ?? $pos + $repeat
               !! die "'x' outside of " ~ b.^name;
       },
-      -> --> Nil {
+      -> --> Nil {                                      # X
           unless $repeat eq "*" {
               $repeat <= $pos
                 ?? $pos = $pos - $repeat
                 !! die "'X' outside of " ~ b.^name;
           }
-      },  # X
-      -> --> Nil { reassemble-string(0) },  # Z
+      },
+      -> --> Nil { reassemble-string(0) },              # Z
     ;
 
     for @template -> $todo {
@@ -281,86 +353,6 @@ multi sub unpack(@template, Blob:D \b) {
     }
 
     @result
-}
-
-=finish
-
-augment class Buf {
-
-    proto method unpack(|) { * }
-    multi method unpack(Blob:D: Str:D $template) {
-        self.unpack($template.comb(/<[a..zA..Z]>[\d+|'*']?/))
-    }
-    multi method unpack(Blob:D: @template) {
-        nqp::isnull(nqp::getlexcaller('EXPERIMENTAL-PACK')) and X::Experimental.new(
-            feature => "the 'unpack' method",
-            use     => "pack"
-        ).throw;
-        my @bytes = self.list;
-        my @fields;
-        for @template -> $unit {
-            my $directive = substr($unit,0,1);
-            my $repeat    = substr($unit,1);
-            my $pa = $repeat eq ''  ?? 1            !!
-                     $repeat eq '*' ?? @bytes.elems !! +$repeat;
-
-            given $directive {
-                when 'a' | 'A' | 'Z' {
-                    @fields.push: @bytes.splice(0, $pa).map(&chr).join;
-                }
-                when 'H' {
-                    my str $hexstring = '';
-                    for ^$pa {
-                        my $byte = shift @bytes;
-                        $hexstring ~= ($byte +> 4).fmt('%x')
-                                    ~ ($byte % 16).fmt('%x');
-                    }
-                    @fields.push($hexstring);
-                }
-                when 'x' {
-                    splice @bytes, 0, $pa;
-                }
-                when 'C' {
-                    @fields.append: @bytes.splice(0, $pa);
-                }
-                when 'S' | 'v' {
-                    for ^$pa {
-                        last if @bytes.elems < 2;
-                        @fields.append: shift(@bytes)
-                                    + (shift(@bytes) +< 0x08);
-                    }
-                }
-                when 'L' | 'V' {
-                    for ^$pa {
-                        last if @bytes.elems < 4;
-                        @fields.append: shift(@bytes)
-                                    + (shift(@bytes) +< 0x08)
-                                    + (shift(@bytes) +< 0x10)
-                                    + (shift(@bytes) +< 0x18);
-                    }
-                }
-                when 'n' {
-                    for ^$pa {
-                        last if @bytes.elems < 2;
-                        @fields.append: (shift(@bytes) +< 0x08)
-                                    + shift(@bytes);
-                    }
-                }
-                when 'N' {
-                    for ^$pa {
-                        last if @bytes.elems < 4;
-                        @fields.append: (shift(@bytes) +< 0x18)
-                                    + (shift(@bytes) +< 0x10)
-                                    + (shift(@bytes) +< 0x08)
-                                    + shift(@bytes);
-                    }
-                }
-                X::Buf::Pack.new(:$directive).throw;
-            }
-        }
-
-        return |@fields;
-    }
 }
 
 # vim: ft=perl6 expandtab sw=4
