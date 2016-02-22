@@ -1,6 +1,6 @@
 {
     "name"         : "PackUnpack",
-    "version"      : "0.02",
+    "version"      : "0.03",
     "perl"         : "6.c",
     "description"  : "Implementation of pack/unpack a la Perl 5",
     "auth"         : "github:lizmat",
