@@ -1,5 +1,7 @@
 use v6.c;
 
+unit module PackUnpack:ver<0.01>;
+
 use MONKEY-TYPING;
 
 my %dispatch;
@@ -19,19 +21,8 @@ my int @VAX4 = 0x00,0x08,0x10,0x18;                     # long
 my int @VAX8 = 0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x38; # quad
 my int @NAT  = $bits == 32 ?? @VAX4 !! @VAX8;           # native
 
-dd parse-template("a*x234N");
-dd pack("a*aa2",<a bb ccc>);
-dd pack("A*A*A*",<a bb ccc>);
-dd pack("Z*Z5Z2",<a bb ccc>);
-dd unpack("U*",pack("U3",97,0xe7,0x1F4A9));
-dd pack("h*","2143");
-dd pack("CH*",42,"1234");
-dd pack("N*",1,2,3);
-dd pack("N*",4,5,6);
-dd pack("x5");
-
 # parse a pack/unpack template into ops with additional info
-sub parse-template($template) is export {
+sub parse-pack-template($template) is export {
     my int $i     = -1;
     my int $chars = $template.chars;
     my @template;
@@ -68,7 +59,7 @@ sub parse-template($template) is export {
 }
 
 proto sub pack(|) is export { * }
-multi sub pack(Str $template, |c) { pack(parse-template($template),|c) }
+multi sub pack(Str $t, |c) { pack(parse-pack-template($t),|c) }
 multi sub pack(@template, *@items) {
     my $buf = Buf.new;
     my $repeat;
@@ -181,9 +172,7 @@ multi sub pack(@template, *@items) {
 }
 
 proto sub unpack(|) is export { * }
-multi sub unpack(Str $template, Blob:D \b) {
-    unpack(parse-template($template),b)
-}
+multi sub unpack(Str $t, Blob:D \b) { unpack(parse-pack-template($t),b) }
 multi sub unpack(@template, Blob:D \b) {
     my @result;
     my $repeat;
