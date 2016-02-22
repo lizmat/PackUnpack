@@ -255,7 +255,7 @@ multi sub unpack(@template, Blob:D \b) {
         my int $shifts = @shifts.elems;
         if $repeat eq "*" {
             @result.push(reassemble-Int(@shifts))
-              while $pos + $shifts < $elems;
+              while $pos + $shifts <= $elems;
         }
         else {
             my int $times = min $repeat, ($elems - $pos) / $shifts;
@@ -266,7 +266,7 @@ multi sub unpack(@template, Blob:D \b) {
         my int $shifts = @shifts.elems;
         my Int $result;
         if $repeat eq "*" {
-            while $pos + $shifts < $elems {
+            while $pos + $shifts <= $elems {
                 $result = reassemble-Int(@shifts);
                 @result.push($result > bound ?? $result - diff !! $result);
             }
