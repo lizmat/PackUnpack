@@ -2,8 +2,6 @@ use v6.c;
 
 unit module PackUnpack:ver<0.01>;
 
-use MONKEY-TYPING;
-
 my %dispatch;
 {
     my int $i = -1;
