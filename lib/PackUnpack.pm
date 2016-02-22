@@ -26,30 +26,35 @@ sub parse-pack-template($template) is export {
     my @template;
     while ($i = $i + 1) < $chars {
         my str $directive = substr($template,$i,1);
-        X::Buf::Pack.new(:$directive).throw
-          unless %dispatch.EXISTS-KEY($directive);
+        if %dispatch.EXISTS-KEY($directive) {
+            my str $repeat = ($i = $i + 1) < $chars
+              ?? substr($template,$i,1)
+              !! "1";
 
-        my str $repeat = ($i = $i + 1) < $chars
-          ?? substr($template,$i,1)
-          !! "1";
-
-        if %dispatch.EXISTS-KEY($repeat) {  # repeat factor is next directive
-            @template.push( (%dispatch.AT-KEY($directive),1) );
-            $i = $i - 1;  # went one too far
+            if %dispatch.EXISTS-KEY($repeat) {  # repeat is next directive
+                @template.push( (%dispatch.AT-KEY($directive),1) );
+                $i = $i - 1;  # went one too far
+            }
+            elsif $repeat eq '*' {
+                @template.push( (%dispatch.AT-KEY($directive),$repeat) );
+            }
+            elsif $repeat.unival === NaN {
+                X::Buf::Pack.new(:directive($directive ~ $repeat)).throw;
+            }
+            else {  # a number
+                my $next;
+                $repeat = $repeat ~ $next
+                  while ($i = $i + 1) < $chars
+                    && !(($next = substr($template,$i,1)).unival === NaN);
+                @template.push( (%dispatch.AT-KEY($directive),+$repeat) );
+                $i = $i - 1; # went one too far
+            }
         }
-        elsif $repeat eq '*' {
-            @template.push( (%dispatch.AT-KEY($directive),$repeat) );
+        elsif $directive eq " " || uniprop($directive,'White_Space') {
+            # no action needed, whitespace is ignored
         }
-        elsif $repeat.unival === NaN {
-            X::Buf::Pack.new(:directive($directive ~ $repeat)).throw;
-        }
-        else {  # a number
-            my $next;
-            $repeat = $repeat ~ $next
-              while ($i = $i + 1) < $chars
-                && !(($next = substr($template,$i,1)).unival === NaN);
-            @template.push( (%dispatch.AT-KEY($directive),+$repeat) );
-            $i = $i - 1; # went one too far
+        else {
+            X::Buf::Pack.new(:$directive).throw;
         }
     }
 
