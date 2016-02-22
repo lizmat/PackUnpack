@@ -6,7 +6,7 @@ my %dispatch;
 {
     my int $i = -1;
     %dispatch.ASSIGN-KEY($_,$i = $i + 1)
-      for <a A c C h H i I l L n N q Q s S v V x Z>;   # Q fix highlighting
+      for <a A c C h H i I l L n N q Q s S U v V x Z>;   # Q fix highlighting
 }
 my int $bits = $*KERNEL.bits;
 
@@ -23,12 +23,14 @@ dd parse-template("a*x234N");
 dd pack("a*aa2",<a bb ccc>);
 dd pack("A*A*A*",<a bb ccc>);
 dd pack("Z*Z5Z2",<a bb ccc>);
+dd unpack("U*",pack("U3",97,0xe7,0x1F4A9));
 dd pack("h*","2143");
 dd pack("CH*",42,"1234");
 dd pack("N*",1,2,3);
 dd pack("N*",4,5,6);
 dd pack("x5");
 
+# parse a pack/unpack template into ops with additional info
 sub parse-template($template) is export {
     my int $i     = -1;
     my int $chars = $template.chars;
@@ -160,6 +162,10 @@ multi sub pack(@template, *@items) {
       -> --> Nil { repeated-shift-per-byte(@VAX8) },     # Q
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # s
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # S
+      -> --> Nil {  # U
+        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
+        $buf.append(@items.AT-POS($pos++).chr.encode.list) for ^$repeat;
+      },
       -> --> Nil { repeated-shift-per-byte(@VAX2) },     # v
       -> --> Nil { repeated-shift-per-byte(@VAX4) },     # V
       -> --> Nil { fill((),0,0) unless $repeat eq '*' }, # x
@@ -184,15 +190,12 @@ multi sub unpack(@template, Blob:D \b) {
     my int $pos   = 0;
     my int $elems = b.elems; 
 
-    sub reassemble-string($filler?) {
+    sub abyte() { $pos < $elems ?? b.AT-POS($pos++) !! 0 }
+    sub reassemble-string($filler? --> Nil) {
         my @string;
-        if $repeat eq "*" || $pos + $repeat > $elems {
-            $pos = $pos - 1;
-            @string.push(b.ATPOS($pos)) while ($pos = $pos + 1) < $elems;
-        }
-        else {
-            @string.push(b.ATPOS($pos++)) for ^$repeat;
-        }
+        $repeat = $elems - $pos if $repeat eq "*" || $pos + $repeat > $elems;
+        @string.push(b.ATPOS($pos++)) for ^$repeat;
+
         if defined($filler) {
             my int $i = @string.elems;
             @string.pop
@@ -200,7 +203,19 @@ multi sub unpack(@template, Blob:D \b) {
         }
         @result.push(chrs(@string));
     }
-    sub reassemble-int(int @shifts) {
+    sub reassemble-int(int @shifts --> Nil) {
+    }
+    sub reassemble-utf8(--> Nil) {
+        my int $byte = abyte;
+        $byte +> 7 == 0
+          ?? @result.push(utf8.new($byte).decode.ord)
+          !! $byte +> 5 == 0b110
+            ?? @result.push(utf8.new($byte,abyte).decode.ord)
+            !! $byte +> 4 == 0b1110
+              ?? @result.push(utf8.new($byte,abyte,abyte).decode.ord)
+              !! $byte +> 3 == 0b11110
+                ?? @result.push(utf8.new($byte,abyte,abyte,abyte).decode.ord)
+                !! die "Cannot unpack byte '{sprintf('%#x', $byte)}' using directive 'U'";
     }
 
     # make sure this has the same order as the %dispatch initialization
@@ -231,6 +246,11 @@ multi sub unpack(@template, Blob:D \b) {
       -> --> Nil { reassemble-int(@VAX8) },     # Q
       -> --> Nil { reassemble-int(@VAX2) },     # s
       -> --> Nil { reassemble-int(@VAX2) },     # S
+      -> --> Nil {  # U
+          $repeat eq "*"
+            ?? (reassemble-utf8() while $pos < $elems)
+            !! (reassemble-utf8() for ^$repeat);
+      },        
       -> --> Nil { reassemble-int(@VAX2) },     # v
       -> --> Nil { reassemble-int(@VAX4) },     # V
       -> --> Nil { }, # x
