@@ -1,6 +1,6 @@
 use v6.c;
 
-unit module PackUnpack:ver<0.05>;
+unit module PackUnpack:ver<0.06>;
 
 my %dispatch;
 {
@@ -313,7 +313,6 @@ multi sub unpack(@template, Blob:D \b) {
                 !! die "Cannot unpack byte '{sprintf('%#x', $byte)}' using directive 'U'";
     }
     sub reassemble-ber(-->Nil) {
-        my int $shift = 0;
         my int $byte;
         my Int $val = 0;
         $val = ($val + ($byte +& 0x7F)) * 128 until ($byte = abyte) < 0x80;
