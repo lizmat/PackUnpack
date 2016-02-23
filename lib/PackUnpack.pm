@@ -6,7 +6,7 @@ my %dispatch;
 {
     my int $i = -1;
     %dispatch.ASSIGN-KEY($_,$i = $i + 1)
-      for <a A c C h H i I l L n N q Q s S U v V x X Z>;  # Q fix hl
+      for <a A c C h H i I l L n N q Q s S U v V w x X Z>;  # Q fix hl
 }
 my int $bits = $*KERNEL.bits;
 
@@ -37,7 +37,7 @@ sub parse-pack-template($template) is export {
     my int $chars = $template.chars;
     my @template;
 
-    sub is-whitespace(\s) { s eq " " || uniprop(s,'White_Space') }
+    sub is-whitespace(\s) { s eq " " || uniprop(s,'White_Space') } # ) fix hl
 
     while ($i = $i + 1) < $chars {
         my str $directive = substr($template,$i,1);
@@ -125,11 +125,11 @@ multi sub pack(@template, *@items) {
         }
         my int $i = -2;
         if flip {
-            $buf.append( :16(substr(hex,$i,2).flip) )
+            $buf.push( :16(substr(hex,$i,2).flip) )
               while ($i = $i + 2) < $chars;
         }
         else {
-            $buf.append( :16(substr(hex,$i,2)) )
+            $buf.push( :16(substr(hex,$i,2)) )
               while ($i = $i + 2) < $chars;
         }
     }
@@ -141,11 +141,24 @@ multi sub pack(@template, *@items) {
         $data
     }
     sub one(--> Nil) {
-        $buf.append( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
+        $buf.push( $pos < $elems ?? @items.AT-POS($pos++) !! 0 )
     }
     sub hex(\flip --> Nil) {
-        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
-        from-hex(@items.AT-POS($pos++),flip) for ^$repeat;
+        my int $times = $repeat eq '*' || $repeat > @items - $pos
+          ?? @items - $pos
+          !! $repeat;
+        from-hex(@items.AT-POS($pos++),flip) for ^$times;
+    }
+    sub ber(Int $val is copy --> Nil) {
+        if $val < 0x80 {
+            $buf.push($val);
+        }
+        else {
+            my int @bytes = $val +& 0x7f;
+            @bytes.unshift($val +& 0x7f +| 0x80)
+              until ($val = $val div 0x80) == 0;
+            $buf.push(@bytes);
+       }
     }
 
     # make sure this has the same order as the %dispatch initialization
@@ -175,11 +188,19 @@ multi sub pack(@template, *@items) {
       -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # s
       -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # S
       -> --> Nil {                                                  # U
-        $repeat = @items - $pos if $repeat eq '*' || $repeat > @items - $pos;
-        $buf.append(@items.AT-POS($pos++).chr.encode.list) for ^$repeat;
+        my int $times = $repeat eq '*' || $repeat > @items - $pos
+          ?? @items - $pos
+          !! $repeat;
+        $buf.push(@items.AT-POS($pos++).chr.encode.list) for ^$times;
       },
       -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # v
       -> --> Nil { repeat-shift-per-byte(@VAX4) },                  # V
+      -> --> Nil {                                                  # w
+        my int $times = $repeat eq '*' || $repeat > @items - $pos
+          ?? @items - $pos
+          !! $repeat;
+        ber(@items.AT-POS($pos++)) for ^$times;
+      },
       -> --> Nil { fill((),0,0) unless $repeat eq '*' },            # x
       -> --> Nil {                                                  # X
         unless $repeat eq '*' {
@@ -291,6 +312,13 @@ multi sub unpack(@template, Blob:D \b) {
                 ?? @result.push(utf8.new($byte,abyte,abyte,abyte).decode.ord)
                 !! die "Cannot unpack byte '{sprintf('%#x', $byte)}' using directive 'U'";
     }
+    sub reassemble-ber(-->Nil) {
+        my int $shift = 0;
+        my int $byte;
+        my Int $val = 0;
+        $val = ($val + ($byte +& 0x7F)) * 128 until ($byte = abyte) < 0x80;
+        @result.push($val + $byte);
+    }
 
     # make sure this has the same order as the %dispatch initialization
     my @dispatch =
@@ -330,6 +358,11 @@ multi sub unpack(@template, Blob:D \b) {
       },        
       -> --> Nil { repeat-reassemble-uint(@VAX2) },     # v
       -> --> Nil { repeat-reassemble-uint(@VAX4) },     # V
+      -> --> Nil {                                      # w
+          $repeat eq "*"
+            ?? (reassemble-ber() while $pos < $elems)
+            !! (reassemble-ber() for ^$repeat);
+      },
       -> --> Nil {                                      # x
           $pos = $repeat eq "*"
             ?? $elems
