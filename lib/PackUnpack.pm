@@ -11,6 +11,7 @@ my %dispatch;
 my int $bits = $*KERNEL.bits;
 
 # this need to be conditional on the endianness of the system
+my int @NONE;                          # no shifting whatsoever
 my int @NET2 = 0x08,0x00;              # short, network (big-endian) order
 my int @NET4 = 0x18,0x10,0x08,0x00;                     # long
 my int @NET8 = 0x38,0x30,0x28,0x20,0x18,0x10,0x08,0x00; # quad
@@ -87,6 +88,15 @@ multi sub pack(@template, *@items) {
     my int $pos   = 0;
     my int $elems = @items.elems; 
 
+    sub putabyte(--> Nil) {
+        if $pos < $elems {
+            my $data = @items.AT-POS($pos++);
+            fill($data ~~ Str ?? $data.encode !! $data,0,0);
+        }
+        else {
+            fill((),0,0);
+        }
+    }
     sub repeat-shift-per-byte(int @shifts --> Nil) {
         if $repeat eq '*' {
             for ^$elems {
@@ -149,29 +159,40 @@ multi sub pack(@template, *@items) {
           !! $repeat;
         from-hex(@items.AT-POS($pos++),flip) for ^$times;
     }
-    sub ber(Int $val is copy --> Nil) {
-        if $val < 0x80 {
-            $buf.push($val);
+    sub encode(--> Nil) {
+        my int $times = $repeat eq '*' || $repeat > @items - $pos
+          ?? @items - $pos
+          !! $repeat;
+        $buf.push(@items.AT-POS($pos++).chr.encode.list) for ^$times;
+    }
+    sub ber(--> Nil) {
+        sub ber-encode(Int $val is copy --> Nil) {
+            if $val < 0x80 {
+                $buf.push($val);
+            }
+            else {
+                my int @bytes = $val +& 0x7f;
+                @bytes.unshift($val +& 0x7f +| 0x80)
+                  until ($val = $val div 0x80) == 0;
+                $buf.push(@bytes);
+            }
         }
-        else {
-            my int @bytes = $val +& 0x7f;
-            @bytes.unshift($val +& 0x7f +| 0x80)
-              until ($val = $val div 0x80) == 0;
-            $buf.push(@bytes);
-       }
+        my int $times = $repeat eq '*' || $repeat > @items - $pos
+          ?? @items - $pos
+          !! $repeat;
+        ber-encode(@items.AT-POS($pos++)) for ^$times;
+    }
+    sub pop(--> Nil) {
+        unless $repeat eq '*' {
+            $repeat <= $buf.elems
+              ?? ($buf.pop for ^$repeat)
+              !! die "'X' outside of " ~ $buf.^name;
+        }
     }
 
     # make sure this has the same order as the %dispatch initialization
-    my @dispatch =
-      -> --> Nil {                                                  # a
-        if $pos < $elems {
-            my $data = @items.AT-POS($pos++);
-            fill($data ~~ Str ?? $data.encode !! $data,0,0);
-        }
-        else {
-            fill((),0,0);
-        }
-      },
+    state @dispatch =
+      -> --> Nil { putabyte() },                                    # a
       -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,0) },  # A
       -> --> Nil { one() },                                         # c
       -> --> Nil { one() },                                         # C
@@ -187,28 +208,12 @@ multi sub pack(@template, *@items) {
       -> --> Nil { repeat-shift-per-byte(@VAX8) },                  # Q
       -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # s
       -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # S
-      -> --> Nil {                                                  # U
-        my int $times = $repeat eq '*' || $repeat > @items - $pos
-          ?? @items - $pos
-          !! $repeat;
-        $buf.push(@items.AT-POS($pos++).chr.encode.list) for ^$times;
-      },
+      -> --> Nil { encode() },                                      # U
       -> --> Nil { repeat-shift-per-byte(@VAX2) },                  # v
       -> --> Nil { repeat-shift-per-byte(@VAX4) },                  # V
-      -> --> Nil {                                                  # w
-        my int $times = $repeat eq '*' || $repeat > @items - $pos
-          ?? @items - $pos
-          !! $repeat;
-        ber(@items.AT-POS($pos++)) for ^$times;
-      },
+      -> --> Nil { ber() },                                         # w
       -> --> Nil { fill((),0,0) unless $repeat eq '*' },            # x
-      -> --> Nil {                                                  # X
-        unless $repeat eq '*' {
-            $repeat <= $buf.elems
-              ?? ($buf.pop for ^$repeat)
-              !! die "'X' outside of " ~ $buf.^name;
-        }
-      },
+      -> --> Nil { pop() },                                         # X
       -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,1) },  # Z
     ;
 
@@ -268,9 +273,14 @@ multi sub unpack(@template, Blob:D \b) {
         @result.push($result)
     }
     sub reassemble-Int(int @shifts) {
-        my Int $result = 0;
-        $result = $result +| b.AT-POS($pos++) +< $_ for @shifts;
-        $result
+        if @shifts {
+            my Int $result = 0;
+            $result = $result +| b.AT-POS($pos++) +< $_ for @shifts;
+            $result
+        }
+        else {
+            b.AT-POS($pos++)
+        }
     }
     sub repeat-reassemble-uint(int @shifts --> Nil) {
         my int $shifts = @shifts.elems;
@@ -320,16 +330,13 @@ multi sub unpack(@template, Blob:D \b) {
     }
 
     # make sure this has the same order as the %dispatch initialization
-    my @dispatch =
+    state @dispatch =
       -> --> Nil { reassemble-string() },               # a
       -> --> Nil { reassemble-string(0x20) },           # A
       -> --> Nil {                                      # c
-        my int $byte = $pos < $elems ?? b.AT-POS($pos++) !! 0;
-        @result.push( $byte > 127 ?? $byte - 256 !! $byte );
+          repeat-reassemble-int(@NONE,127,256)
       },
-      -> --> Nil {                                      # C
-        @result.push( $pos < $elems ?? b.AT-POS($pos++) !! 0 );
-      },
+      -> --> Nil { repeat-reassemble-uint(@NONE) },     # C
       -> --> Nil { repeat-reassemble-hex(1)  },         # h
       -> --> Nil { repeat-reassemble-hex(0)  },         # H
       -> --> Nil {                                      # i
@@ -372,7 +379,7 @@ multi sub unpack(@template, Blob:D \b) {
       -> --> Nil {                                      # X
           unless $repeat eq "*" {
               $repeat <= $pos
-                ?? $pos = $pos - $repeat
+                ?? ($pos = $pos - $repeat)
                 !! die "'X' outside of " ~ b.^name;
           }
       },
