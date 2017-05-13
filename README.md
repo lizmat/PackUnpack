@@ -48,7 +48,7 @@ Feel free to clone your own copy:
 
 # Build/Installation
 
- $ panda install PackUnpack
+ $ zef install PackUnpack
 
 # Author
 Elizabeth Mattijsen <liz@wenzperl.nl>
