@@ -24,12 +24,12 @@ to pack/unpack with the same template, efficiency will improve by parsing
 the template only once and feeding its result to pack/unpack instead of
 the original template string.
 
- use PackUnpack;
+   use PackUnpack;
 
- say pack("ccxxcc",65,66,67,68); # "AB\0\0CD";
+   say pack("ccxxcc",65,66,67,68); # "AB\0\0CD";
 
- my @template = parse-pack-template("ccxxcc");
- say pack(@template,65,66,67,68); # same
+   my @template = parse-pack-template("ccxxcc");
+   say pack(@template,65,66,67,68); # same
 
 # Copying
 Copyright (c) 2016 Elizabeth Mattijsen.  All rights reserved.
