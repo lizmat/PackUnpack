@@ -1,6 +1,6 @@
 use v6.c;
 
-unit module PackUnpack:ver<0.07>;
+unit module PackUnpack:ver<0.08>;
 
 my %dispatch;
 {
@@ -81,9 +81,13 @@ sub parse-pack-template($template) is export {
 }
 
 proto sub pack(|) is export { * }
-multi sub pack(Str $t, |c) { pack(parse-pack-template($t),|c) }
+multi sub pack(Str $t, *@items) {
+    pack(Buf.new, parse-pack-template($t),@items)
+}
 multi sub pack(@template, *@items) {
-    my $buf = Buf.new;
+    pack(Buf.new, @template, @items)
+}
+multi sub pack(Buf:D $buf, @template, @items) {
     my $repeat;
     my int $pos   = 0;
     my int $elems = @items.elems; 
@@ -191,7 +195,7 @@ multi sub pack(@template, *@items) {
     }
 
     # make sure this has the same order as the %dispatch initialization
-    my @dispatch =
+    state @dispatch =
       -> --> Nil { putabyte() },                                    # a
       -> --> Nil { fill( $pos < $elems ?? ascii() !! (),0x20,0) },  # A
       -> --> Nil { one() },                                         # c
